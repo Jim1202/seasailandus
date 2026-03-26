@@ -33,7 +33,7 @@ img{max-width:100%;display:block}
 .archive-panel summary::-webkit-details-marker{display:none}
 .archive-panel ul{margin:10px 0 0;padding-left:18px}
 .home-hero{position:relative;min-height:82vh;display:grid;place-items:end stretch;overflow:hidden}
-.hero-bg,.post-hero-image{position:absolute;inset:0;background-size:cover;background-position:center 80%}
+.hero-bg,.post-hero-image{position:absolute;inset:0;background-size:cover;background-position:center 30%}
 .hero-shade{position:absolute;inset:0;background:linear-gradient(180deg, rgba(13,31,52,.12) 0%, rgba(11,22,36,.55) 58%, rgba(11,22,36,.75) 100%)}
 .hero-content{position:relative;padding:130px 0 78px;color:#fff;max-width:850px}
 .hero-kicker{letter-spacing:.18em;text-transform:uppercase;font-size:.95rem;color:#d5b27c;margin:0 0 10px;font-weight:600}
