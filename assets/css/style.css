@@ -44,9 +44,9 @@ img{max-width:100%;display:block}
 }
 .hero-content {
   position: relative;
-  padding: 40px;
+  padding: 32px;
   color: #fff;
-  max-width: 850px;
+  max-width: 600px;
 
   background: rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(6px);
