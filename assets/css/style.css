@@ -32,7 +32,7 @@ img{max-width:100%;display:block}
 .archive-panel summary{font-weight:600;cursor:pointer;list-style:none}
 .archive-panel summary::-webkit-details-marker{display:none}
 .archive-panel ul{margin:10px 0 0;padding-left:18px}
-.home-hero{position:relative;min-height:82vh;display: grid;align-items: center;justify-content: start;padding-left: 1%;
+.home-hero{position:relative;min-height:82vh;display: grid;align-items: center;justify-content: start;padding-left: 8%;
 ;overflow:hidden}
 .hero-bg,.post-hero-image{position:absolute;inset:0;background-size:cover;background-position:center 30%}
 .hero-shade {display: none;}
