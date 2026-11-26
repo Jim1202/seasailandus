@@ -34,6 +34,9 @@ import urllib.request
 
 from bs4 import BeautifulSoup
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sale_pages  # noqa: E402
+
 BLOG = "https://seasailandus.blogspot.com"
 FEED = BLOG + "/feeds/posts/default?alt=json&max-results={n}&start-index={i}"
 PAGE_SIZE = 25  # Blogger returns fewer entries than asked when posts are large
@@ -197,9 +200,16 @@ def first_image(body_html: str) -> str | None:
     return img["src"] if img else None
 
 
-def render_body(entry: dict, images: Images) -> tuple[str, str]:
-    """Return (article inner html, hero image path)."""
+def render_body(entry: dict, images: Images, with_toc: bool = False) -> tuple[str, str, dict]:
+    """Return (article inner html, hero image path, extras).
+
+    extras = {"toc": [...], "words": int, "photos": int}; the outline is only
+    built (and anchors only added) when with_toc is set.
+    """
     soup = BeautifulSoup(entry["content"]["$t"], "html.parser")
+    extra = {"toc": sale_pages.add_toc(soup) if with_toc else [],
+             "words": len(soup.get_text(" ").split()),
+             "photos": len(soup.find_all("img", src=True))}
     hero = None
     for tag in soup.find_all(["style", "script"]):  # e.g. CSS pasted from Word
         tag.decompose()
@@ -219,7 +229,7 @@ def render_body(entry: dict, images: Images) -> tuple[str, str]:
     body = (f'<div class="post-body entry-content" id="post-body-{post_id(entry)}" '
             f'itemprop="description articleBody">\n{soup.decode().strip()}\n'
             f'<div style="clear: both;"></div>\n</div>')
-    return body, hero or FALLBACK_HERO
+    return body, hero or FALLBACK_HERO, extra
 
 
 # --------------------------------------------------------------------------
@@ -239,19 +249,7 @@ HEAD = """<!DOCTYPE html>
   <link rel="stylesheet" href="/assets/css/style.css" />
 </head>
 <body class="{body_class}">
-<header class="site-header">
-  <div class="container header-inner">
-    <a class="brand" href="/index.html">Sea Sail & Us</a>
-    <nav class="main-nav">
-      <a href="/index.html">Home</a>
-      <a href="/all-posts.html">All Posts</a>
-      <div class="archive-dropdown">
-        <button type="button">Archive</button>
-        <div class="archive-panel">{archive}</div>
-      </div>
-    </nav>
-  </div>
-</header>
+{header}
 """
 
 FOOT = """
@@ -265,47 +263,191 @@ FOOT = """
 </html>"""
 
 
+def nav_links(has_sale: bool, current: str | None = None) -> str:
+    """The tab links shown before the Archive menu."""
+    links = [("home", "/index.html", "Home", ""), ("all", "/all-posts.html", "All Posts", "")]
+    if has_sale:
+        links.append(("sale", "/for-sale.html", "For Sale", ' class="nav-sale"'))
+    out = ""
+    for key, href, label, cls in links:
+        here = ' aria-current="page"' if key == current else ""
+        out += f'\n      <a{cls} href="{href}"{here}>{label}</a>'
+    return out
+
+
+HEADER = """<header class="site-header">
+  <script>document.documentElement.classList.add("js")</script>
+  <div class="container header-inner">
+    <a class="brand" href="/index.html">Sea Sail & Us</a>
+    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav"><span class="menu-bars" aria-hidden="true"></span>Menu</button>
+    <nav class="main-nav" id="site-nav" aria-label="Main">{nav}
+      <div class="archive-dropdown">
+        <button class="archive-toggle" type="button" aria-expanded="false" aria-controls="archive-panel">Archive<span class="chev" aria-hidden="true"></span></button>
+        <div class="archive-panel" id="archive-panel">{archive}</div>
+      </div>
+    </nav>
+  </div>
+  <script src="/assets/js/menu.js" defer></script>
+</header>"""
+
+HEADER_RE = re.compile(r'<header class="site-header">.*?</header>', re.S)
+
+
+def header_html(archive: str, nav: str) -> str:
+    return HEADER.format(archive=archive, nav=nav)
+
+
+def refresh_header(text: str, archive: str, nav: str) -> str:
+    """Rebuild the whole site header (menu + Archive) on an existing page."""
+    return HEADER_RE.sub(lambda _m: header_html(archive, nav), text, count=1)
+
+
+def head(title: str, body_class: str, archive: str, nav: str) -> str:
+    return HEAD.format(title=title, body_class=body_class, header=header_html(archive, nav))
+
+
 def archive_panel(posts: list[dict]) -> str:
-    years: dict[int, list[int]] = {}
+    years: dict[int, dict[int, int]] = {}
     for p in posts:
         d = parse_time(p["published"])
-        months = years.setdefault(d.year, [])
-        if d.month not in months:
-            months.append(d.month)
+        months = years.setdefault(d.year, {})
+        months[d.month] = months.get(d.month, 0) + 1
     out = []
-    for y in sorted(years, reverse=True):
+    for i, y in enumerate(sorted(years, reverse=True)):
         items = "".join(
-            f'<li><a href="/all-posts.html#{y}-{EN_MONTHS[m - 1].lower()}">{EN_MONTHS[m - 1]}</a></li>'
+            f'<li><a href="/all-posts.html#{y}-{EN_MONTHS[m - 1].lower()}">{EN_MONTHS[m - 1]}'
+            f'<span class="n">{years[y][m]}</span></a></li>'
             for m in sorted(years[y], reverse=True))
-        out.append(f"<details><summary>{y}</summary><ul>{items}</ul></details>")
-    return "".join(out)
+        opened = " open" if i == 0 else ""
+        out.append(f'<details{opened}><summary>{y}<span class="n">{sum(years[y].values())}</span></summary>'
+                   f"<ul>{items}</ul></details>")
+    return "".join(out) + '<a class="archive-all" href="/all-posts.html">See every post →</a>'
 
 
-def render_post_page(p: dict, body: str, archive: str) -> str:
+def render_post_page(p: dict, body: str, archive: str, nav: str,
+                     sale_docs: list[dict] | None = None, toc: list[dict] | None = None) -> str:
+    """A post page. Sale posts (sale_docs given) get the For Sale side panel."""
     t = esc(p["title"])
-    return (HEAD.format(title=t, body_class="post-page", archive=archive) + f"""
+    if sale_docs is None:
+        back = '<a class="eyebrow-link" href="/all-posts.html">← Back to archive</a>'
+        shell = f"""  <section class="post-shell container">
+    <article class="post-content">{body}</article>
+  </section>"""
+        extra = ""
+    else:
+        back = '<a class="eyebrow-link" href="/for-sale.html">← All Alcyone sale documents</a>'
+        shell = f"""  <section class="post-shell container has-aside">
+{sale_aside(p, sale_docs, toc or [])}
+    <article class="post-content">{body}</article>
+  </section>"""
+        extra = SALE_POST_EXTRA
+    return (head(t, "post-page", archive, nav) + f"""
 <main>
   <section class="post-hero compact">
     <div class="post-hero-image" style="background-image:url('{p['hero']}')"></div>
     <div class="post-hero-overlay"></div>
     <div class="container post-hero-content">
-      <a class="eyebrow-link" href="/all-posts.html">← Back to archive</a>
+      {back}
       <p class="post-date">{french_date(p['published'])}</p>
       <h1>{t}</h1>
     </div>
   </section>
-  <section class="post-shell container">
-    <article class="post-content">{body}</article>
-  </section>
+{shell}
 </main>
-""" + FOOT)
+{extra}""" + FOOT)
+
+
+def doc_meta(p: dict) -> str:
+    bits = [french_date(p["published"])]
+    if p.get("words"):
+        bits.append(f"{max(1, round(p['words'] / 220))} min read")
+    if p.get("photos"):
+        bits.append(f"{p['photos']} photos")
+    return " · ".join(bits)
+
+
+def toc_html(toc: list[dict], base: str = "") -> str:
+    """Nested, collapsible outline: level-1 items, each with its level-2 items."""
+    groups: list[tuple[dict, list[dict]]] = []
+    for item in toc:
+        if item["level"] == 1 or not groups:
+            groups.append((item, []))
+        else:
+            groups[-1][1].append(item)
+    out = []
+    for top, kids in groups:
+        link = f'<a href="{base}#{top["id"]}">{esc(top["text"])}</a>'
+        if not kids:
+            out.append(f"<li>{link}</li>")
+            continue
+        sub = "".join(f'<li><a href="{base}#{k["id"]}">{esc(k["text"])}</a></li>' for k in kids)
+        out.append(f'<li><details><summary>{link}<span class="toc-n">{len(kids)}</span></summary>'
+                   f"<ol>{sub}</ol></details></li>")
+    return "".join(out)
+
+
+def sale_aside(p: dict, sale_docs: list[dict], toc: list[dict]) -> str:
+    docs = ""
+    for d in sale_docs:
+        cls = ' class="is-current"' if d["id"] == p["id"] else ""
+        docs += f'<li{cls}><a href="{url(d)}">{esc(sale_pages.nice_title(d["title"]))}</a></li>'
+    docs_card = f"""
+      <details class="aside-card"{"" if toc else " open"}>
+        <summary>Alcyone · for sale ({len(sale_docs)} documents)</summary>
+        <ol class="sale-doc-list">{docs}</ol>
+        <a class="aside-all" href="/for-sale.html">All sale documents →</a>
+      </details>"""
+    toc_card = ""
+    if toc:
+        toc_card = f"""
+      <details class="aside-card toc-card" open>
+        <summary>On this page</summary>
+        <input class="toc-filter" type="search" placeholder="Find a section, e.g. dinghy" aria-label="Find a section">
+        <ol class="toc-list">{toc_html(toc)}</ol>
+        <p class="toc-empty" hidden>No section title matches. Use your browser's Find (Ctrl+F / ⌘F) to search the whole text.</p>
+      </details>"""
+    out = '    <aside class="post-aside">' + toc_card + docs_card
+    return out + "\n    </aside>"
+
+
+SALE_POST_EXTRA = """<a class="to-top" href="#" aria-label="Back to top">↑</a>
+<script>
+(function () {
+  // Collapse the side panels on small screens so the post starts near the top.
+  if (window.matchMedia("(max-width: 1080px)").matches) {
+    document.querySelectorAll(".post-aside > details").forEach(function (d) { d.open = false; });
+  }
+  var input = document.querySelector(".toc-filter");
+  if (!input) return;
+  var items = Array.prototype.slice.call(document.querySelectorAll(".toc-list > li"));
+  var empty = document.querySelector(".toc-empty");
+  input.addEventListener("input", function () {
+    var q = input.value.trim().toLowerCase(), shown = 0;
+    items.forEach(function (li) {
+      var details = li.querySelector("details");
+      var subs = Array.prototype.slice.call(li.querySelectorAll("details li"));
+      var topHit = li.querySelector("a").textContent.toLowerCase().indexOf(q) > -1;
+      var subHits = 0;
+      subs.forEach(function (s) {
+        var hit = !q || topHit || s.textContent.toLowerCase().indexOf(q) > -1;
+        s.hidden = !hit; if (hit) subHits++;
+      });
+      var visible = !q || topHit || subHits > 0;
+      li.hidden = !visible; if (visible) shown++;
+      if (details) details.open = !!q && visible;
+    });
+    empty.hidden = shown > 0;
+  });
+})();
+</script>
+"""
 
 
 def url(p: dict) -> str:
     return "/posts/" + p["file"]
 
 
-def render_index(posts: list[dict], archive: str) -> str:
+def render_index(posts: list[dict], archive: str, nav: str) -> str:
     top = posts[0]
     t = esc(top["title"])
     cards = "".join(f"""
@@ -329,7 +471,7 @@ def render_index(posts: list[dict], archive: str) -> str:
       </div>
     </article>
     """ for p in posts[1 + INDEX_RECENT:1 + INDEX_RECENT + INDEX_MORE])
-    return HEAD.format(title="Home", body_class="home-page", archive=archive) + f"""
+    return head("Home", "home-page", archive, nav) + f"""
 <main>
   <section class="home-hero">
     <div class="hero-bg" style="background-image:url('/images/IMG_2237.jpeg')"></div>
@@ -378,7 +520,7 @@ def render_index(posts: list[dict], archive: str) -> str:
 """ + FOOT
 
 
-def render_all_posts(posts: list[dict], archive: str) -> str:
+def render_all_posts(posts: list[dict], archive: str, nav: str) -> str:
     out, cur_year, cur_month = [], None, None
     for p in posts:
         d = parse_time(p["published"])
@@ -403,7 +545,7 @@ def render_all_posts(posts: list[dict], archive: str) -> str:
             </article>""")
     if posts:
         out.append("</div></div></section>")
-    return HEAD.format(title="All Posts", body_class="", archive=archive) + """
+    return head("All Posts", "", archive, nav) + """
 <main class="archive-page">
   <section class="archive-hero container">
     <p class="hero-kicker dark">Archive</p>
@@ -411,6 +553,57 @@ def render_all_posts(posts: list[dict], archive: str) -> str:
     <p>Browse the journal by year and month, or use the archive menu above.</p>
   </section>
   """ + "".join(out) + """
+</main>
+""" + FOOT
+
+
+def render_for_sale(docs: list[dict], tocs: dict[str, list[dict]], archive: str, nav: str) -> str:
+    """The For Sale tab: every sale document, grouped, with links into its sections."""
+    first = docs[0]
+    jump, groups = [], []
+    for key, label, blurb in sale_pages.GROUPS:
+        members = [d for d in docs if sale_pages.group_of(d["title"]) == key]
+        if not members:
+            continue
+        jump.append(f'<a href="#{key}">{esc(label)} <span>{len(members)}</span></a>')
+        cards = []
+        for d in members:
+            top = [t for t in tocs.get(d["id"], []) if t["level"] == 1]
+            sections = ""
+            if top:
+                links = "".join(f'<li><a href="{url(d)}#{t["id"]}">{esc(t["text"])}</a></li>' for t in top)
+                sections = (f'<details class="sale-doc-sections"><summary>Jump to a section '
+                            f'({len(top)})</summary><ul>{links}</ul></details>')
+            cards.append(f"""
+      <article class="sale-doc">
+        <a class="sale-doc-image" href="{url(d)}"><img src="{d['hero']}" alt="" loading="lazy"></a>
+        <div class="sale-doc-body">
+          <p class="card-date">{doc_meta(d)}</p>
+          <h3><a href="{url(d)}">{esc(sale_pages.nice_title(d['title']))}</a></h3>
+          <p>{esc(d['excerpt'])}</p>
+          {sections}
+          <a class="read-more" href="{url(d)}">Read the document →</a>
+        </div>
+      </article>""")
+        groups.append(f"""
+  <section class="container sale-group" id="{key}">
+    <div class="section-head"><h2>{esc(label)}</h2><p>{esc(blurb)}</p></div>
+    <div class="sale-docs">{"".join(cards)}
+    </div>
+  </section>""")
+    return head("For Sale", "sale-page", archive, nav) + f"""
+<main>
+  <section class="post-hero sale-hero">
+    <div class="post-hero-image" style="background-image:url('{first['hero']}')"></div>
+    <div class="post-hero-overlay"></div>
+    <div class="container post-hero-content">
+      <p class="hero-kicker">For sale</p>
+      <h1>ALCYONE · Outremer 55 Light (2004)</h1>
+      <p class="sale-lede">All of the sale documents in one place. Start with the quick presentation, or jump straight to the section you need.</p>
+      <div class="hero-actions"><a class="button solid" href="{url(first)}">Read the quick presentation</a></div>
+    </div>
+  </section>
+  <nav class="container sale-jump" aria-label="Sale document groups">{"".join(jump)}</nav>{"".join(groups)}
 </main>
 """ + FOOT
 
@@ -445,6 +638,10 @@ def new_filename(entry: dict, taken: set[str]) -> str:
     if name in taken:
         name = f"{base}-{post_id(entry)[-6:]}.html"
     return name
+
+
+def blogger_url(entry: dict) -> str:
+    return next((l["href"] for l in entry["link"] if l["rel"] == "alternate"), "")
 
 
 def write_if_changed(path: str, text: str, dry_run: bool) -> bool:
@@ -484,17 +681,20 @@ def main() -> int:
     added, updated = [], []
     for pid, e in feed_by_id.items():
         known = manifest.get(pid)
-        if known and known.get("updated") == e["updated"]["$t"] and "title" in known:
-            continue  # unchanged and fully described
-        if known and known.get("updated") == e["updated"]["$t"]:
-            # Unchanged page from the original scrape: only fill in list metadata.
-            src = first_image(e["content"]["$t"])
-            known.update(title=title_of(e), published=e["published"]["$t"],
-                         excerpt=excerpt(e["content"]["$t"]),
-                         hero=(images.local(src) if src else None) or FALLBACK_HERO,
-                         blogger_url=next((l["href"] for l in e["link"] if l["rel"] == "alternate"), ""))
+        unchanged = bool(known) and known.get("updated") == e["updated"]["$t"]
+        sale = sale_pages.is_sale(title_of(e))
+        if unchanged and not sale:
+            if "title" not in known:
+                # Unchanged page from the original scrape: only fill in list metadata.
+                src = first_image(e["content"]["$t"])
+                known.update(title=title_of(e), published=e["published"]["$t"],
+                             excerpt=excerpt(e["content"]["$t"]),
+                             hero=(images.local(src) if src else None) or FALLBACK_HERO,
+                             blogger_url=blogger_url(e))
             continue
-        body, hero = render_body(e, images)
+        # New, edited, or a sale post (always rebuilt: its side panel lists the
+        # other sale posts, which may have changed).
+        body, hero, extra = render_body(e, images, with_toc=sale)
         file = known["file"] if known else new_filename(e, taken)
         taken.add(file)
         manifest[pid] = {
@@ -504,38 +704,52 @@ def main() -> int:
             "published": e["published"]["$t"],
             "excerpt": excerpt(e["content"]["$t"]),
             "hero": hero,
-            "blogger_url": next((l["href"] for l in e["link"] if l["rel"] == "alternate"), ""),
+            "blogger_url": blogger_url(e),
             "_body": body,
+            "_extra": extra,
         }
-        (updated if known else added).append(pid)
+        if sale:
+            manifest[pid].update(words=extra["words"], photos=extra["photos"])
+        if not unchanged:
+            (updated if known else added).append(pid)
 
     posts = sorted(({"id": k, **v} for k, v in manifest.items()),
                    key=lambda p: p["published"], reverse=True)
     archive = archive_panel(posts)
+    sale_docs = sale_pages.order_docs([p for p in posts if sale_pages.is_sale(p["title"])])
+    nav = nav_links(bool(sale_docs))
 
     changed_files = []
     for p in posts:
         if "_body" in p:
             path = os.path.join(POSTS_DIR, p["file"])
-            if write_if_changed(path, render_post_page(p, p["_body"], archive), args.dry_run):
+            is_sale_doc = sale_pages.is_sale(p["title"])
+            nav_here = nav_links(bool(sale_docs), "sale" if is_sale_doc else None)
+            page = render_post_page(p, p["_body"], archive, nav_here,
+                                    sale_docs if is_sale_doc else None, p["_extra"]["toc"])
+            if write_if_changed(path, page, args.dry_run):
                 changed_files.append(path)
-    # Refresh the Archive menu on every other page.
-    panel_re = re.compile(r'<div class="archive-panel">.*?</div>\n', re.S)
+    # Refresh the menu (tabs + Archive) on every other page.
     for path in sorted(glob.glob(os.path.join(POSTS_DIR, "*.html"))) + [os.path.join(ROOT, "about.html")]:
-        if path in changed_files:
+        if path in changed_files or any(p["file"] == os.path.basename(path) and "_body" in p for p in posts):
             continue
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        new = panel_re.sub(lambda _m: f'<div class="archive-panel">{archive}</div>\n', text, count=1)
-        if write_if_changed(path, new, args.dry_run):
+        if write_if_changed(path, refresh_header(text, archive, nav), args.dry_run):
             changed_files.append(path)
-    for name, text in (("index.html", render_index(posts, archive)),
-                       ("all-posts.html", render_all_posts(posts, archive))):
+    pages = [("index.html", render_index(posts, archive, nav_links(bool(sale_docs), "home"))),
+             ("all-posts.html", render_all_posts(posts, archive, nav_links(bool(sale_docs), "all")))]
+    if sale_docs:
+        tocs = {p["id"]: p["_extra"]["toc"] for p in posts if "_extra" in p}
+        pages.append(("for-sale.html", render_for_sale(sale_docs, tocs, archive,
+                                                       nav_links(True, "sale"))))
+    for name, text in pages:
         if write_if_changed(os.path.join(ROOT, name), text, args.dry_run):
             changed_files.append(os.path.join(ROOT, name))
 
     for v in manifest.values():
         v.pop("_body", None)
+        v.pop("_extra", None)
     ordered = {p["id"]: manifest[p["id"]] for p in posts}
     write_if_changed(MANIFEST, json.dumps(ordered, ensure_ascii=False, indent=1) + "\n", args.dry_run)
 
