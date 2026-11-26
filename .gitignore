@@ -5,3 +5,6 @@ __pycache__/
 .venv-mac/
 .ipynb_checkpoints/
 .env
+
+# sync job scratch output
+sync-output.txt

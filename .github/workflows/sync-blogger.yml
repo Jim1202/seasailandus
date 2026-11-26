@@ -1,0 +1,67 @@
+name: Sync posts from Blogger
+
+on:
+  schedule:
+    # 4 times a day (UTC). GitHub may start a scheduled run a few minutes late.
+    - cron: "17 */6 * * *"
+  workflow_dispatch: {}   # "Run workflow" button on the Actions tab
+
+permissions:
+  contents: write   # commit and push the synced posts
+  actions: write    # keep this schedule from being auto-disabled (see last step)
+
+concurrency:
+  group: sync-blogger
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r scripts/requirements.txt
+
+      - name: Sync from Blogger
+        run: python scripts/sync_blogger.py | tee sync-output.txt
+
+      - name: Commit and push if anything changed
+        run: |
+          # sync-output.txt is in .gitignore
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "Nothing changed on Blogger."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          {
+            echo "Sync posts from Blogger"
+            echo
+            grep -E '^(Added|Updated|  [+~]|Images|WARNING)' sync-output.txt || true
+          } > /tmp/commit-msg.txt
+          git commit -q -F /tmp/commit-msg.txt
+          git push
+          # Netlify redeploys automatically from this push.
+
+      - name: Fail loudly if posts were removed on Blogger
+        run: |
+          if [ -f REMOVED_ON_BLOGGER.md ]; then
+            cat REMOVED_ON_BLOGGER.md
+            echo "::error::Some posts are no longer on Blogger. See REMOVED_ON_BLOGGER.md; nothing was deleted."
+            exit 1
+          fi
+
+      - name: Keep the schedule alive
+        # GitHub turns off scheduled workflows after 60 days without repository
+        # activity. Re-enabling the workflow through the API resets that clock.
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${{ github.repository }}/actions/workflows/sync-blogger.yml/enable" || true
