@@ -23,6 +23,20 @@
     e.stopPropagation();
     setArchive(!archive.classList.contains("is-open"));
   });
+  // Desktop hover: keep the Archive panel open for a moment after the mouse
+  // leaves, so moving down (or slightly diagonally) into it doesn't close it.
+  var lingerTimer = null;
+  if (archive && window.matchMedia("(hover: hover)").matches) {
+    archive.addEventListener("mouseenter", function () {
+      clearTimeout(lingerTimer);
+      archive.classList.remove("is-lingering");
+    });
+    archive.addEventListener("mouseleave", function () {
+      archive.classList.add("is-lingering");
+      clearTimeout(lingerTimer);
+      lingerTimer = setTimeout(function () { archive.classList.remove("is-lingering"); }, 400);
+    });
+  }
   document.addEventListener("click", function (e) {
     if (archive && !archive.contains(e.target)) setArchive(false);
     if (!header.contains(e.target)) setMenu(false);

@@ -257,7 +257,6 @@ html:not(.js) .archive-dropdown:hover .archive-panel,html:not(.js) .archive-drop
 .archive-toggle{display:inline-flex;align-items:center;gap:8px}
 .chev{display:inline-block;width:7px;height:7px;border:solid currentColor;border-width:0 2px 2px 0;transform:translateY(-2px) rotate(45deg);transition:transform .2s ease}
 .archive-dropdown.is-open .chev{transform:translateY(1px) rotate(-135deg)}
-.archive-panel::before{content:"";position:absolute;left:0;right:0;top:-14px;height:14px}
 .archive-panel summary{display:flex;justify-content:space-between;align-items:center}
 .archive-panel summary::after{content:"+";color:var(--muted);font-weight:400;margin-left:10px}
 .archive-panel details[open]>summary::after{content:"–"}
@@ -266,7 +265,9 @@ html:not(.js) .archive-dropdown:hover .archive-panel,html:not(.js) .archive-drop
 .archive-panel summary .n{margin-left:auto}
 .archive-all{display:block;margin-top:12px;padding-top:10px;border-top:1px solid var(--line);font-weight:600}
 @media (hover:hover) and (min-width:761px){
-  .js .archive-dropdown:hover .archive-panel{display:block}
+  .js .archive-dropdown:hover .archive-panel,.js .archive-dropdown.is-lingering .archive-panel{display:block}
+  /* invisible strip covering the gap between the button and the panel */
+  .archive-dropdown:hover::after,.archive-dropdown.is-lingering::after{content:"";position:absolute;left:-40px;right:-10px;top:100%;height:16px}
 }
 @media (max-width:760px){
   .js .header-inner{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;padding:12px 0;gap:0}
@@ -288,6 +289,5 @@ html:not(.js) .archive-dropdown:hover .archive-panel,html:not(.js) .archive-drop
   .js .main-nav>a.nav-sale{align-self:stretch;text-align:center;margin:12px 0 4px;padding:10px 16px;border-bottom:1px solid rgba(182,134,74,.45)}
   .js .archive-toggle{width:100%;justify-content:space-between;border-bottom:0}
   .js .archive-panel{max-height:none;padding:8px 14px;margin-top:0}
-  .js .archive-panel::before{display:none}
 }
 .archive-panel ul{list-style:none;padding-left:6px}
